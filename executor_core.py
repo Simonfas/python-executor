@@ -58,7 +58,7 @@ class WindowInfo:
     @property
     def display_name(self) -> str:
         proc = self.process_name or f"PID {self.pid}"
-        return f"{self.title}  —  {proc}  [HWND {self.hwnd}]"
+        return f"{self.title}: {proc}  [HWND {self.hwnd}]"
 
 
 class DependencyError(RuntimeError):
@@ -950,6 +950,141 @@ def detect_optional_first_argument(script_path: str | Path) -> str | None:
         return visitor.first_arg_name
 
     return None
+
+
+@dataclass(frozen=True)
+class ScriptChoice:
+    value: str
+    label: str
+
+
+def _resolve_script_path_expression(node: ast.AST, script_path: Path) -> Path | None:
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        left = _resolve_script_path_expression(node.left, script_path)
+        if left is None:
+            return None
+        if isinstance(node.right, ast.Constant) and isinstance(node.right.value, str):
+            return left / node.right.value
+        return None
+
+    if isinstance(node, ast.Attribute) and node.attr == "parent":
+        base = _resolve_script_path_expression(node.value, script_path)
+        return base.parent if base is not None else None
+
+    if isinstance(node, ast.Call):
+        if isinstance(node.func, ast.Name) and node.func.id == "Path" and len(node.args) == 1:
+            arg = node.args[0]
+            if isinstance(arg, ast.Name) and arg.id == "__file__":
+                return script_path.resolve()
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                value = Path(arg.value)
+                if value.is_absolute():
+                    return value
+                return (script_path.parent / value).resolve()
+
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "joinpath":
+            base = _resolve_script_path_expression(node.func.value, script_path)
+            if base is None:
+                return None
+            parts = []
+            for arg in node.args:
+                if not isinstance(arg, ast.Constant) or not isinstance(arg.value, str):
+                    return None
+                parts.append(arg.value)
+            return base.joinpath(*parts)
+
+    return None
+
+
+def detect_song_directory(script_path: str | Path) -> Path | None:
+    path = Path(script_path).resolve()
+    source = path.read_text(encoding="utf-8-sig")
+    tree = ast.parse(source, filename=str(path))
+
+    candidates: list[tuple[int, Path]] = []
+
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        value = node.value
+        if value is None:
+            continue
+
+        for target in targets:
+            if not isinstance(target, ast.Name):
+                continue
+
+            resolved = _resolve_script_path_expression(value, path)
+            if resolved is None:
+                continue
+
+            name = target.id.lower()
+            score = 0
+            if "song" in name:
+                score += 10
+            if name.endswith("_dir") or name.endswith("_folder"):
+                score += 4
+            if resolved.name.lower() in {"songs", "song", "music"}:
+                score += 6
+
+            if score:
+                candidates.append((score, resolved))
+
+    ranked = sorted(candidates, key=lambda item: item[0], reverse=True)
+
+    for _, candidate in ranked:
+        if candidate.is_dir():
+            return candidate
+
+    if ranked:
+        return ranked[0][1]
+
+    return None
+
+
+def detect_song_choices(script_path: str | Path) -> tuple[Path | None, list[ScriptChoice]]:
+    songs_dir = detect_song_directory(script_path)
+    if songs_dir is None:
+        return None, []
+
+    ids: set[str] = set()
+
+    for file in songs_dir.glob("*.json"):
+        if not file.name.endswith(".meta.json"):
+            ids.add(file.stem)
+
+    for file in songs_dir.glob("*.txt"):
+        ids.add(file.stem)
+
+    choices: list[ScriptChoice] = []
+
+    for song_id in sorted(ids, key=str.lower):
+        display_name = song_id
+        json_path = songs_dir / f"{song_id}.json"
+        meta_path = songs_dir / f"{song_id}.meta.json"
+
+        data = None
+        source_file = json_path if json_path.is_file() else meta_path
+        if source_file.is_file():
+            try:
+                data = json.loads(source_file.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, UnicodeError):
+                data = None
+
+        if isinstance(data, dict):
+            name = str(data.get("name", "")).strip()
+            if name:
+                display_name = name
+
+        label = display_name
+        if display_name.casefold() != song_id.casefold():
+            label = f"{display_name}: {song_id}"
+
+        choices.append(ScriptChoice(song_id, label))
+
+    return songs_dir, choices
 
 
 @dataclass(frozen=True)
