@@ -11,7 +11,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
-from executor_core import LogTranslator, ScriptExecutor, WindowInfo, detect_optional_first_argument, detect_required_arguments, enumerate_windows, focus_window, scan_script
+from executor_core import LogTranslator, ScriptExecutor, WindowInfo, detect_optional_first_argument, detect_required_arguments, detect_song_choices, enumerate_windows, focus_window, scan_script
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -52,7 +52,7 @@ TEXT = {
         "choose_py": "Choose a file with the .py extension.",
         "found": "Found",
         "installed_as": "Installed as",
-        "checked_start": "checked automatically on start.",
+        "checked_start": "Checked automatically on start",
         "no_external": "No external dependencies found.",
         "scan_failed": "Could not scan the file",
         "choose_window_first": "Choose a window first.",
@@ -85,6 +85,13 @@ TEXT = {
         "argument_cancelled": "Script start cancelled because a required command-line argument was not provided.",
         "optional_argument_title": "Optional command-line argument",
         "optional_argument_prompt": "Enter {name}. Leave blank to continue without it (for example, BPM mode).",
+        "song_select_title": "Choose song",
+        "song_select_text": "Choose a song from the folder used by the script.",
+        "song_folder": "Folder",
+        "song_select": "Play selected song",
+        "bpm_mode": "BPM mode",
+        "cancel": "Cancel",
+        "no_songs": "No songs were found in this folder.",
         "security_scan": "Scanning script for suspicious behavior...",
         "security_warning_title": "Potential backdoor detected",
         "security_warning_intro": (
@@ -123,7 +130,7 @@ TEXT = {
         "choose_py": "Vælg en fil med .py-endelsen.",
         "found": "Fundet",
         "installed_as": "Installeres som",
-        "checked_start": "kontrolleres automatisk ved start.",
+        "checked_start": "Kontrolleres automatisk ved start",
         "no_external": "Ingen eksterne dependencies fundet.",
         "scan_failed": "Kunne ikke scanne filen",
         "choose_window_first": "Vælg et vindue først.",
@@ -156,6 +163,13 @@ TEXT = {
         "argument_cancelled": "Scriptstart blev annulleret, fordi et nødvendigt kommandolinje-argument ikke blev angivet.",
         "optional_argument_title": "Valgfrit kommandolinje-argument",
         "optional_argument_prompt": "Indtast {name}. Lad feltet være tomt for at fortsætte uden det (f.eks. BPM-tilstand).",
+        "song_select_title": "Vælg sang",
+        "song_select_text": "Vælg en sang fra mappen, som scriptet bruger.",
+        "song_folder": "Mappe",
+        "song_select": "Afspil valgt sang",
+        "bpm_mode": "BPM-tilstand",
+        "cancel": "Annuller",
+        "no_songs": "Der blev ikke fundet nogen sange i denne mappe.",
         "security_scan": "Scanner scriptet for mistænkelig adfærd...",
         "security_warning_title": "Mulig backdoor fundet",
         "security_warning_intro": (
@@ -625,7 +639,7 @@ class ExecutorApp(tk.Tk):
                 if packages != imports:
                     text += f"  |  {self.t('installed_as')}: " + ", ".join(packages)
 
-                text += f"  —  {self.t('checked_start')}"
+                text += f" [{self.t('checked_start')}]"
             else:
                 text = self.t("no_external")
 
@@ -705,6 +719,110 @@ class ExecutorApp(tk.Tk):
         self._post("input_request", (prompt, response_queue))
         return response_queue.get()
 
+    def choose_song(self, songs_dir: Path, choices) -> str | None:
+        dialog = tk.Toplevel(self)
+        dialog.title(self.t("song_select_title"))
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.resizable(True, True)
+        dialog.minsize(520, 420)
+
+        result = {"value": None}
+
+        root = ttk.Frame(dialog, padding=18)
+        root.pack(fill="both", expand=True)
+
+        ttk.Label(
+            root,
+            text=self.t("song_select_text"),
+            font=("Segoe UI Semibold", 11),
+        ).pack(anchor="w")
+
+        ttk.Label(
+            root,
+            text=f"{self.t('song_folder')}: {songs_dir}",
+            wraplength=650,
+        ).pack(anchor="w", pady=(4, 12))
+
+        list_frame = ttk.Frame(root)
+        list_frame.pack(fill="both", expand=True)
+
+        scrollbar = ttk.Scrollbar(list_frame)
+        scrollbar.pack(side="right", fill="y")
+
+        song_list = tk.Listbox(
+            list_frame,
+            activestyle="dotbox",
+            exportselection=False,
+            font=("Segoe UI", 10),
+            yscrollcommand=scrollbar.set,
+        )
+        song_list.pack(side="left", fill="both", expand=True)
+        scrollbar.configure(command=song_list.yview)
+
+        for choice in choices:
+            song_list.insert("end", choice.label)
+
+        if choices:
+            song_list.selection_set(0)
+            song_list.activate(0)
+        else:
+            song_list.insert("end", self.t("no_songs"))
+            song_list.configure(state="disabled")
+
+        buttons = ttk.Frame(root)
+        buttons.pack(fill="x", pady=(14, 0))
+
+        def select_song():
+            if not choices:
+                return
+            selection = song_list.curselection()
+            if not selection:
+                return
+            result["value"] = choices[selection[0]].value
+            dialog.destroy()
+
+        def bpm_mode():
+            result["value"] = ""
+            dialog.destroy()
+
+        def cancel():
+            result["value"] = None
+            dialog.destroy()
+
+        ttk.Button(
+            buttons,
+            text=self.t("song_select"),
+            command=select_song,
+            state="normal" if choices else "disabled",
+        ).pack(side="left")
+
+        ttk.Button(
+            buttons,
+            text=self.t("bpm_mode"),
+            command=bpm_mode,
+        ).pack(side="left", padx=(8, 0))
+
+        ttk.Button(
+            buttons,
+            text=self.t("cancel"),
+            command=cancel,
+        ).pack(side="right")
+
+        song_list.bind("<Double-Button-1>", lambda _event: select_song())
+        song_list.bind("<Return>", lambda _event: select_song())
+        dialog.protocol("WM_DELETE_WINDOW", cancel)
+
+        dialog.update_idletasks()
+        width = max(520, dialog.winfo_reqwidth())
+        height = max(420, dialog.winfo_reqheight())
+        x = self.winfo_rootx() + max(0, (self.winfo_width() - width) // 2)
+        y = self.winfo_rooty() + max(0, (self.winfo_height() - height) // 2)
+        dialog.geometry(f"{width}x{height}+{x}+{y}")
+
+        self.wait_window(dialog)
+        return result["value"]
+
     def run_script(self):
         path = self._script_path()
         if not path:
@@ -715,6 +833,7 @@ class ExecutorApp(tk.Tk):
             self.log(f"Source integrity baseline: {path.name} [{expected_script_hash[:12]}]")
             argument_specs = detect_required_arguments(path)
             optional_first_argument = detect_optional_first_argument(path)
+            songs_dir, song_choices = detect_song_choices(path)
             self.executor.verify_script_integrity(
                 path,
                 expected_script_hash,
@@ -729,14 +848,22 @@ class ExecutorApp(tk.Tk):
         arguments: list[str] = []
 
         if optional_first_argument and not argument_specs:
-            label = optional_first_argument.replace("_", " ")
-            answer = simpledialog.askstring(
-                self.t("optional_argument_title"),
-                self.t("optional_argument_prompt").format(name=label),
-                parent=self,
-            )
-            if answer is not None and answer.strip():
-                arguments.append(answer.strip())
+            if songs_dir is not None:
+                answer = self.choose_song(songs_dir, song_choices)
+                if answer is None:
+                    self.status_var.set(self.t("ready"))
+                    return
+                if answer:
+                    arguments.append(answer)
+            else:
+                label = optional_first_argument.replace("_", " ")
+                answer = simpledialog.askstring(
+                    self.t("optional_argument_title"),
+                    self.t("optional_argument_prompt").format(name=label),
+                    parent=self,
+                )
+                if answer is not None and answer.strip():
+                    arguments.append(answer.strip())
 
         for spec in argument_specs:
             label = spec.name.replace("_", " ")
