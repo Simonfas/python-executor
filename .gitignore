@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Executor-created virtual environments
+.executor_envs/
+
+# Local UI state
+executor_config.json
+
+# IDE / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
