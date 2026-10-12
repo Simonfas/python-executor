@@ -733,6 +733,7 @@ class ExecutorApp(tk.Tk):
         return response_queue.get()
 
     def choose_song(self, songs_dir: Path, choices) -> str | None:
+        choices = sorted(choices, key=lambda choice: choice.label.casefold())
         dialog = tk.Toplevel(self)
         dialog.title(self.t("song_select_title"))
         dialog.transient(self)
