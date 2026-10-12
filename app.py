@@ -192,6 +192,7 @@ class ExecutorApp(tk.Tk):
         self.executor = ScriptExecutor(APP_DIR)
         self.windows: list[WindowInfo] = []
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
+        self._ui_busy: bool | None = None
         self._hotkey_stop_event = threading.Event()
         self.log_translator = LogTranslator(
             lambda line: self._post("translated_log", line)
@@ -212,7 +213,7 @@ class ExecutorApp(tk.Tk):
         if self.script_var.get():
             self.preview_imports()
 
-        self.after(80, self._drain_events)
+        self.after(250, self._drain_events)
         self._start_global_ctrl_c_watcher()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -499,8 +500,10 @@ class ExecutorApp(tk.Tk):
         self.events.put((event, value))
 
     def _drain_events(self):
+        processed = 0
         try:
-            while True:
+            while processed < 100:
+                processed += 1
                 event, value = self.events.get_nowait()
 
                 if event == "log":
@@ -534,7 +537,8 @@ class ExecutorApp(tk.Tk):
         except queue.Empty:
             pass
 
-        self.after(80, self._drain_events)
+        delay = 40 if not self.events.empty() else (100 if self.executor.process and self.executor.process.poll() is None else 250)
+        self.after(delay, self._drain_events)
 
     def _start_global_ctrl_c_watcher(self):
         if os.name != "nt":
@@ -547,6 +551,12 @@ class ExecutorApp(tk.Tk):
             was_pressed = False
 
             while not self._hotkey_stop_event.is_set():
+                process = self.executor.process
+                if process is None or process.poll() is not None:
+                    was_pressed = False
+                    self._hotkey_stop_event.wait(0.5)
+                    continue
+
                 ctrl_down = bool(user32.GetAsyncKeyState(VK_CONTROL) & 0x8000)
                 c_down = bool(user32.GetAsyncKeyState(VK_C) & 0x8000)
                 pressed = ctrl_down and c_down
@@ -557,7 +567,7 @@ class ExecutorApp(tk.Tk):
                         self._post("global_ctrl_c")
 
                 was_pressed = pressed
-                self._hotkey_stop_event.wait(0.03)
+                self._hotkey_stop_event.wait(0.10)
 
         threading.Thread(
             target=watch,
@@ -580,10 +590,13 @@ class ExecutorApp(tk.Tk):
         self.log_text.configure(state="disabled")
 
     def _set_busy(self, busy: bool):
+        if self._ui_busy is busy:
+            return
+        self._ui_busy = busy
         if busy:
             self.run_button.configure(state="disabled")
             self.stop_button.configure(state="normal")
-            self.progress.start(12)
+            self.progress.start(100)
         else:
             self.run_button.configure(state="normal")
             self.stop_button.configure(state="disabled")
